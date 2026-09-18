@@ -1,6 +1,7 @@
 import { NextResponse, after } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature';
+import { decrypt } from '@/lib/whatsapp/encryption';
 import { fetchMessengerUserProfile } from '@/lib/messenger/messenger-api';
 import { runAutomationsForTrigger } from '@/lib/automations/engine';
 import { dispatchInboundToFlows } from '@/lib/flows/engine';
@@ -81,17 +82,38 @@ export async function GET(request: Request) {
       });
     }
 
-    // Check database messenger_config
+    // Check database messenger_config or whatsapp_config
     const { data: configs } = await supabaseAdmin()
-      .from('messenger_config')
+      .from('whatsapp_config')
       .select('id, verify_token');
 
     let matched = false;
     if (configs) {
       for (const config of configs) {
-        if (config.verify_token === verifyToken) {
+        if (!config.verify_token) continue;
+        let tokenPlain = config.verify_token;
+        try {
+          tokenPlain = decrypt(config.verify_token);
+        } catch {
+          // fallback to plaintext
+        }
+        if (tokenPlain === verifyToken || config.verify_token === verifyToken) {
           matched = true;
           break;
+        }
+      }
+    }
+
+    if (!matched) {
+      const { data: mConfigs } = await supabaseAdmin()
+        .from('messenger_config')
+        .select('id, verify_token');
+      if (mConfigs) {
+        for (const config of mConfigs) {
+          if (config.verify_token === verifyToken) {
+            matched = true;
+            break;
+          }
         }
       }
     }
@@ -121,16 +143,38 @@ export async function POST(request: Request) {
   const rawBody = await request.text();
   const signature = request.headers.get('x-hub-signature-256');
 
-  if (!verifyMetaWebhookSignature(rawBody, signature)) {
-    console.warn('[messenger-webhook] invalid signature');
-    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
-  }
-
   let body: { object?: string; entry?: MessengerWebhookEntry[] };
   try {
     body = JSON.parse(rawBody);
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
+  }
+
+  let customSecret: string | null = null;
+  const pageId = body.entry?.[0]?.id;
+
+  if (pageId) {
+    const { data: wConfig } = await supabaseAdmin()
+      .from('whatsapp_config')
+      .select('waba_id')
+      .eq('phone_number_id', pageId)
+      .maybeSingle();
+    
+    if (wConfig?.waba_id) {
+      customSecret = wConfig.waba_id;
+    } else {
+      const { data: mConfig } = await supabaseAdmin()
+        .from('messenger_config')
+        .select('app_secret')
+        .eq('page_id', pageId)
+        .maybeSingle();
+      if (mConfig?.app_secret) customSecret = mConfig.app_secret;
+    }
+  }
+
+  if (!verifyMetaWebhookSignature(rawBody, signature, customSecret)) {
+    console.warn('[messenger-webhook] invalid signature');
+    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
   }
 
   if (body.object !== 'page' || !body.entry) {
@@ -152,12 +196,31 @@ async function processMessengerWebhook(entries: MessengerWebhookEntry[]) {
   for (const entry of entries) {
     const pageId = entry.id;
 
-    // Lookup messenger_config by page_id
-    const { data: config } = await supabaseAdmin()
-      .from('messenger_config')
+    // Lookup config by page_id / phone_number_id in whatsapp_config or messenger_config
+    let config: any = null;
+    const { data: wConfig } = await supabaseAdmin()
+      .from('whatsapp_config')
       .select('*')
-      .eq('page_id', pageId)
+      .eq('phone_number_id', pageId)
       .maybeSingle();
+
+    if (wConfig) {
+      config = wConfig;
+      if (wConfig.access_token) {
+        try {
+          config.access_token = decrypt(wConfig.access_token);
+        } catch {
+          // fallback
+        }
+      }
+    } else {
+      const { data: mConfig } = await supabaseAdmin()
+        .from('messenger_config')
+        .select('*')
+        .eq('page_id', pageId)
+        .maybeSingle();
+      config = mConfig;
+    }
 
     for (const event of entry.messaging || []) {
       await handleMessagingEvent(event, pageId, config);

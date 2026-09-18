@@ -49,6 +49,7 @@ export function MessengerConfig() {
   const [pageInfo, setPageInfo] = useState<{ id?: string; name?: string } | null>(null);
 
   const [phoneNumberId, setPhoneNumberId] = useState(''); // Facebook Page ID
+  const [appId, setAppId] = useState(''); // Facebook App ID
   const [wabaId, setWabaId] = useState(''); // Meta App Secret
   const [accessToken, setAccessToken] = useState(''); // Page Access Token
   const [verifyToken, setVerifyToken] = useState(''); // Webhook Verify Token
@@ -70,12 +71,14 @@ export function MessengerConfig() {
 
       if (data) {
         setPhoneNumberId(data.phone_number_id || '');
+        setAppId(data.business_account_id || data.app_id || '');
         setWabaId(data.waba_id || '');
         setAccessToken(MASKED_TOKEN);
         setVerifyToken('');
         setTokenEdited(false);
       } else {
         setPhoneNumberId('');
+        setAppId('');
         setWabaId('');
         setAccessToken('');
         setVerifyToken('');
@@ -141,6 +144,7 @@ export function MessengerConfig() {
       setSaving(true);
       const payload: Record<string, unknown> = {
         phone_number_id: phoneNumberId.trim(),
+        app_id: appId.trim() || null,
         waba_id: wabaId.trim() || null,
         verify_token: verifyToken.trim() || null,
       };
@@ -301,14 +305,26 @@ export function MessengerConfig() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label className="text-muted-foreground">Facebook Page ID</Label>
-                <Input
-                  placeholder="e.g. 109238472938475"
-                  value={phoneNumberId}
-                  onChange={(e) => setPhoneNumberId(e.target.value)}
-                  className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground">Facebook Page ID</Label>
+                  <Input
+                    placeholder="e.g. 109238472938475"
+                    value={phoneNumberId}
+                    onChange={(e) => setPhoneNumberId(e.target.value)}
+                    className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground">Facebook App ID</Label>
+                  <Input
+                    placeholder="e.g. 847293847510923"
+                    value={appId}
+                    onChange={(e) => setAppId(e.target.value)}
+                    className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
+                  />
+                </div>
               </div>
 
               <div className="space-y-2">
