@@ -150,7 +150,6 @@ export async function POST(request: Request) {
 
     const baseRow = {
       phone_number_id: phone_number_id.trim(),
-      business_account_id: app_id ? app_id.trim() : null,
       waba_id: waba_id ? waba_id.trim() : null,
       access_token: encryptedAccessToken,
       verify_token: encryptedVerifyToken,

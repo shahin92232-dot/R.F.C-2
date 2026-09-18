@@ -305,30 +305,18 @@ export function MessengerConfig() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label className="text-muted-foreground">Facebook Page ID</Label>
-                  <Input
-                    placeholder="e.g. 109238472938475"
-                    value={phoneNumberId}
-                    onChange={(e) => setPhoneNumberId(e.target.value)}
-                    className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label className="text-muted-foreground">Facebook App ID</Label>
-                  <Input
-                    placeholder="e.g. 847293847510923"
-                    value={appId}
-                    onChange={(e) => setAppId(e.target.value)}
-                    className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
-                  />
-                </div>
+              <div className="space-y-2">
+                <Label className="text-muted-foreground">Facebook Page ID</Label>
+                <Input
+                  placeholder="e.g. 109238472938475"
+                  value={phoneNumberId}
+                  onChange={(e) => setPhoneNumberId(e.target.value)}
+                  className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
+                />
               </div>
 
               <div className="space-y-2">
-                <Label className="text-muted-foreground">Meta App Secret (Optional)</Label>
+                <Label className="text-muted-foreground">Facebook App Secret (For Webhooks)</Label>
                 <Input
                   placeholder="e.g. 9a8b7c6d5e4f..."
                   value={wabaId}
