@@ -119,52 +119,63 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { phone_number_id, app_id, waba_id, access_token, verify_token } = body;
 
-    if (!phone_number_id || !access_token) {
+    if (!phone_number_id) {
       return NextResponse.json(
-        { error: 'Facebook Page ID and Page Access Token are required' },
+        { error: 'Facebook Page ID is required' },
         { status: 400 }
       );
     }
 
-    // Verify Page ID & Token with Meta Graph API
-    const graphRes = await fetch(
-      `https://graph.facebook.com/v21.0/${phone_number_id.trim()}?fields=id,name&access_token=${access_token.trim()}`
-    );
-
-    if (!graphRes.ok) {
-      const errData = await graphRes.json().catch(() => ({}));
-      return NextResponse.json(
-        {
-          error: errData.error?.message || 'Failed to verify Facebook Page credentials with Meta Graph API',
-          meta: errData.error || null,
-        },
-        { status: 400 }
-      );
-    }
-
-    const pageData = await graphRes.json();
-
-    // Encrypt token
-    const encryptedAccessToken = encrypt(access_token.trim());
-    const baseRow: any = {
-      phone_number_id: phone_number_id.trim(),
-      waba_id: waba_id ? waba_id.trim() : null,
-      access_token: encryptedAccessToken,
-      status: 'connected',
-      connected_at: new Date().toISOString(),
-      registered_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-
-    if (verify_token) {
-      baseRow.verify_token = encrypt(verify_token.trim());
-    }
-
+    // Check if there is already a saved config for this account
     const { data: existing } = await supabase
       .from('whatsapp_config')
       .select('id')
       .eq('account_id', accountId)
       .maybeSingle();
+
+    // First-time setup requires the access token
+    if (!access_token && !existing) {
+      return NextResponse.json(
+        { error: 'Facebook Page ID and Page Access Token are required for initial setup.' },
+        { status: 400 }
+      );
+    }
+
+    let pageData: { name?: string } = {};
+    const baseRow: Record<string, unknown> = {
+      phone_number_id: phone_number_id.trim(),
+      waba_id: waba_id ? waba_id.trim() : null,
+      updated_at: new Date().toISOString(),
+    };
+
+    // Only verify & encrypt a new access token if one was supplied
+    if (access_token && access_token.trim()) {
+      const graphRes = await fetch(
+        `https://graph.facebook.com/v21.0/${phone_number_id.trim()}?fields=id,name&access_token=${access_token.trim()}`
+      );
+
+      if (!graphRes.ok) {
+        const errData = await graphRes.json().catch(() => ({}));
+        return NextResponse.json(
+          {
+            error: errData.error?.message || 'Failed to verify Facebook Page credentials with Meta Graph API',
+            meta: errData.error || null,
+          },
+          { status: 400 }
+        );
+      }
+
+      pageData = await graphRes.json();
+      baseRow.access_token = encrypt(access_token.trim());
+      baseRow.status = 'connected';
+      baseRow.connected_at = new Date().toISOString();
+      baseRow.registered_at = new Date().toISOString();
+    }
+
+    // Only overwrite verify_token if a new one was explicitly provided
+    if (verify_token && verify_token.trim()) {
+      baseRow.verify_token = encrypt(verify_token.trim());
+    }
 
     if (existing) {
       const { error: updateError } = await supabase
@@ -181,6 +192,9 @@ export async function POST(request: Request) {
         .insert({
           account_id: accountId,
           user_id: user.id,
+          status: 'connected',
+          connected_at: new Date().toISOString(),
+          registered_at: new Date().toISOString(),
           ...baseRow,
         });
 
@@ -192,7 +206,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       success: true,
       registered: true,
-      phone_info: { verified_name: pageData.name },
+      phone_info: { verified_name: pageData.name || '' },
     });
   } catch (error) {
     console.error('Error in POST /api/messenger/config:', error);

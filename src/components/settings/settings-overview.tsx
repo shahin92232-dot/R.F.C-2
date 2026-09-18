@@ -26,7 +26,7 @@ interface OverviewCounts {
   customFields: number | null;
 }
 
-interface WhatsAppStatus {
+interface MessengerStatus {
   configured: boolean;
   connected: boolean;
 }
@@ -49,8 +49,8 @@ export function SettingsOverview({
   // token and pings Meta, which is far slower than the cheap count
   // queries. Gating it independently keeps a slow/flaky Meta round-trip
   // from blanking the rest of the landing.
-  const [whatsapp, setWhatsapp] = useState<WhatsAppStatus | null>(null);
-  const [whatsappLoading, setWhatsappLoading] = useState(true);
+  const [messenger, setMessenger] = useState<MessengerStatus | null>(null);
+  const [messengerLoading, setMessengerLoading] = useState(true);
 
   useEffect(() => {
     if (!user || !accountId) return;
@@ -119,21 +119,16 @@ export function SettingsOverview({
 
     // Messenger connection status — slower, independent.
     (async () => {
-      setWhatsappLoading(true);
-      const [row, health] = await Promise.allSettled([
-        supabase
-          .from('whatsapp_config')
-          .select('phone_number_id')
-          .eq('account_id', acctId)
-          .maybeSingle(),
-        fetch('/api/messenger/config', { cache: 'no-store' }).then((r) => r.json()),
-      ]);
+      setMessengerLoading(true);
+      const health = await fetch('/api/messenger/config', { cache: 'no-store' })
+        .then((r) => r.json())
+        .catch(() => null);
       if (cancelled) return;
-      setWhatsapp({
-        configured: row.status === 'fulfilled' && !!row.value.data?.phone_number_id,
-        connected: health.status === 'fulfilled' && !!health.value?.connected,
+      setMessenger({
+        configured: !!health?.page_info || !!health?.connected,
+        connected: !!health?.connected,
       });
-      setWhatsappLoading(false);
+      setMessengerLoading(false);
     })();
 
     return () => {
@@ -160,10 +155,10 @@ export function SettingsOverview({
   }[] = [
     {
       section: 'whatsapp',
-      loading: whatsappLoading,
-      subtitle: !whatsapp?.configured ? (
+      loading: messengerLoading,
+      subtitle: !messenger?.configured ? (
         t('notSetup')
-      ) : whatsapp.connected ? (
+      ) : messenger.connected ? (
         <>
           <StatusDot tone="ok" /> {t('connected')}
         </>

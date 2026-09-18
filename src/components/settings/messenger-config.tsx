@@ -133,12 +133,6 @@ export function MessengerConfig() {
       toast.error('Facebook Page ID is required');
       return;
     }
-    if (!accessToken.trim() || accessToken === MASKED_TOKEN) {
-      if (!tokenEdited) {
-        toast.error('Please enter your Page Access Token');
-        return;
-      }
-    }
 
     try {
       setSaving(true);
@@ -146,15 +140,14 @@ export function MessengerConfig() {
         phone_number_id: phoneNumberId.trim(),
         app_id: appId.trim() || null,
         waba_id: wabaId.trim() || null,
-        verify_token: verifyToken.trim() || null,
+        verify_token: verifyToken.trim() || undefined,
       };
 
+      // Only send access_token to the server if the user actually typed it in.
+      // If the field still shows the masked placeholder, omit it so the server
+      // keeps the previously-encrypted token.
       if (tokenEdited && accessToken !== MASKED_TOKEN && accessToken.trim()) {
         payload.access_token = accessToken.trim();
-      } else {
-        toast.error('Please re-enter your Page Access Token to update configuration');
-        setSaving(false);
-        return;
       }
 
       const res = await fetch('/api/messenger/config', {
