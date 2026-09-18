@@ -54,6 +54,8 @@ export function MessengerConfig() {
   const [accessToken, setAccessToken] = useState(''); // Page Access Token
   const [verifyToken, setVerifyToken] = useState(''); // Webhook Verify Token
   const [tokenEdited, setTokenEdited] = useState(false);
+  const [verifyTokenSaved, setVerifyTokenSaved] = useState(false);
+  const [verifyTokenEdited, setVerifyTokenEdited] = useState(false);
 
   const loadedAccountIdRef = useRef<string | null>(null);
   const webhookUrl = typeof window !== 'undefined' ? `${window.location.origin}/api/messenger/webhook` : '';
@@ -76,6 +78,9 @@ export function MessengerConfig() {
         setAccessToken(MASKED_TOKEN);
         setVerifyToken('');
         setTokenEdited(false);
+        setVerifyTokenEdited(false);
+        // Show masked placeholder if a verify_token is stored (non-null)
+        setVerifyTokenSaved(!!data.verify_token);
       } else {
         setPhoneNumberId('');
         setAppId('');
@@ -83,6 +88,8 @@ export function MessengerConfig() {
         setAccessToken('');
         setVerifyToken('');
         setTokenEdited(false);
+        setVerifyTokenEdited(false);
+        setVerifyTokenSaved(false);
       }
 
       if (data) {
@@ -140,8 +147,12 @@ export function MessengerConfig() {
         phone_number_id: phoneNumberId.trim(),
         app_id: appId.trim() || null,
         waba_id: wabaId.trim() || null,
-        verify_token: verifyToken.trim() || undefined,
       };
+
+      // Only send verify_token if the user actually typed a new one
+      if (verifyTokenEdited && verifyToken.trim()) {
+        payload.verify_token = verifyToken.trim();
+      }
 
       // Only send access_token to the server if the user actually typed it in.
       // If the field still shows the masked placeholder, omit it so the server
@@ -355,14 +366,28 @@ export function MessengerConfig() {
               <div className="space-y-2">
                 <Label className="text-muted-foreground">Webhook Verify Token</Label>
                 <Input
-                  placeholder="Create a custom verify token"
+                  placeholder={verifyTokenSaved && !verifyTokenEdited ? MASKED_TOKEN : 'Create a custom verify token'}
                   value={verifyToken}
-                  onChange={(e) => setVerifyToken(e.target.value)}
+                  onChange={(e) => {
+                    setVerifyToken(e.target.value);
+                    setVerifyTokenEdited(true);
+                  }}
+                  onFocus={() => {
+                    if (verifyTokenSaved && !verifyTokenEdited) {
+                      setVerifyTokenEdited(true);
+                    }
+                  }}
                   className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
                 />
-                <p className="text-xs text-muted-foreground">
-                  A custom string you set in Meta Messenger webhook settings.
-                </p>
+                {verifyTokenSaved && !verifyTokenEdited ? (
+                  <p className="text-xs text-green-500">
+                    ✅ Verify token is saved. Leave empty to keep it, or type a new one to change it.
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    A custom string you set in Meta Messenger webhook settings.
+                  </p>
+                )}
               </div>
 
               <div className="flex items-center gap-3 pt-4">

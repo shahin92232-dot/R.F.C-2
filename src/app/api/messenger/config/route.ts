@@ -88,6 +88,7 @@ export async function GET() {
       connected: true,
       page_info: { id: pageData.id, name: pageData.name },
       phone_info: { verified_name: pageData.name },
+      verify_token_saved: !!config.verify_token,
     });
   } catch (error) {
     console.error('Error in GET /api/messenger/config:', error);
