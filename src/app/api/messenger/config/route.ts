@@ -37,9 +37,9 @@ export async function GET() {
     }
 
     const { data: config, error: configError } = await supabase
-      .from('whatsapp_config')
-      .select('phone_number_id, waba_id, access_token, verify_token, status')
-      .eq('account_id', accountId)
+      .from('messenger_config')
+      .select('*')
+      .or(`account_id.eq.${accountId},user_id.eq.${user.id}`)
       .maybeSingle();
 
     if (configError || !config) {
@@ -59,8 +59,8 @@ export async function GET() {
         needs_reset: true,
         message: 'Page Access Token decryption failed. Please reset and re-enter.',
         saved_config: {
-          pageId: config.phone_number_id,
-          appSecretSaved: !!config.waba_id,
+          pageId: config.page_id,
+          appSecretSaved: !!config.app_secret,
           accessTokenSaved: false,
           verifyTokenSaved: !!config.verify_token,
         },
@@ -68,7 +68,7 @@ export async function GET() {
     }
 
     // Ping Meta Graph API to verify Facebook Page Access Token
-    const pageId = config.phone_number_id;
+    const pageId = config.page_id;
     const graphRes = await fetch(
       `https://graph.facebook.com/v21.0/${pageId}?fields=id,name,access_token&access_token=${pageAccessToken}`
     );
@@ -81,10 +81,11 @@ export async function GET() {
         message: errData.error?.message || 'Meta Graph API validation failed',
         meta: errData.error || null,
         saved_config: {
-          pageId: config.phone_number_id,
-          appSecretSaved: !!config.waba_id,
+          pageId: config.page_id,
+          appSecretSaved: !!config.app_secret,
           accessTokenSaved: !!config.access_token,
           verifyTokenSaved: !!config.verify_token,
+          pageName: config.page_name,
         },
       });
     }
@@ -96,8 +97,8 @@ export async function GET() {
       phone_info: { verified_name: pageData.name },
       verify_token_saved: !!config.verify_token,
       saved_config: {
-        pageId: config.phone_number_id,
-        appSecretSaved: !!config.waba_id,
+        pageId: config.page_id,
+        appSecretSaved: !!config.app_secret,
         accessTokenSaved: !!config.access_token,
         verifyTokenSaved: !!config.verify_token,
         pageName: pageData.name,
@@ -132,8 +133,10 @@ export async function POST(request: Request) {
 
     const body = await request.json();
     const { phone_number_id, app_id, waba_id, access_token, verify_token } = body;
+    const pageId = (phone_number_id || '').trim();
+    const appSecretInput = (waba_id || '').trim();
 
-    if (!phone_number_id) {
+    if (!pageId) {
       return NextResponse.json(
         { error: 'Facebook Page ID is required' },
         { status: 400 }
@@ -142,9 +145,9 @@ export async function POST(request: Request) {
 
     // Check if there is already a saved config for this account
     const { data: existing } = await supabase
-      .from('whatsapp_config')
+      .from('messenger_config')
       .select('id')
-      .eq('account_id', accountId)
+      .or(`account_id.eq.${accountId},user_id.eq.${user.id}`)
       .maybeSingle();
 
     // First-time setup requires the access token
@@ -157,15 +160,18 @@ export async function POST(request: Request) {
 
     let pageData: { name?: string } = {};
     const baseRow: Record<string, unknown> = {
-      phone_number_id: phone_number_id.trim(),
-      waba_id: waba_id ? waba_id.trim() : null,
+      page_id: pageId,
       updated_at: new Date().toISOString(),
     };
+
+    if (appSecretInput) {
+      baseRow.app_secret = appSecretInput;
+    }
 
     // Only verify & encrypt a new access token if one was supplied
     if (access_token && access_token.trim()) {
       const graphRes = await fetch(
-        `https://graph.facebook.com/v21.0/${phone_number_id.trim()}?fields=id,name&access_token=${access_token.trim()}`
+        `https://graph.facebook.com/v21.0/${pageId}?fields=id,name&access_token=${access_token.trim()}`
       );
 
       if (!graphRes.ok) {
@@ -180,10 +186,10 @@ export async function POST(request: Request) {
       }
 
       pageData = await graphRes.json();
+      baseRow.page_name = pageData.name || null;
       baseRow.access_token = encrypt(access_token.trim());
       baseRow.status = 'connected';
       baseRow.connected_at = new Date().toISOString();
-      baseRow.registered_at = new Date().toISOString();
     }
 
     // Only overwrite verify_token if a new one was explicitly provided
@@ -193,26 +199,27 @@ export async function POST(request: Request) {
 
     if (existing) {
       const { error: updateError } = await supabase
-        .from('whatsapp_config')
+        .from('messenger_config')
         .update(baseRow)
-        .eq('account_id', accountId);
+        .eq('id', existing.id);
 
       if (updateError) {
+        console.error('Error updating messenger_config:', updateError);
         return NextResponse.json({ error: 'Failed to update Messenger configuration' }, { status: 500 });
       }
     } else {
       const { error: insertError } = await supabase
-        .from('whatsapp_config')
+        .from('messenger_config')
         .insert({
           account_id: accountId,
           user_id: user.id,
           status: 'connected',
           connected_at: new Date().toISOString(),
-          registered_at: new Date().toISOString(),
           ...baseRow,
         });
 
       if (insertError) {
+        console.error('Error inserting messenger_config:', insertError);
         return NextResponse.json({ error: 'Failed to save Messenger configuration' }, { status: 500 });
       }
     }
@@ -247,9 +254,9 @@ export async function DELETE() {
     }
 
     const { error } = await supabase
-      .from('whatsapp_config')
+      .from('messenger_config')
       .delete()
-      .eq('account_id', accountId);
+      .or(`account_id.eq.${accountId},user_id.eq.${user.id}`);
 
     if (error) {
       return NextResponse.json({ error: 'Failed to reset configuration' }, { status: 500 });

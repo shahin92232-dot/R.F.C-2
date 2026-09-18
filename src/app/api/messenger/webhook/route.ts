@@ -1,4 +1,4 @@
-import { NextResponse, after } from 'next/server';
+import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature';
 import { decrypt } from '@/lib/whatsapp/encryption';
@@ -10,7 +10,7 @@ import { dispatchWebhookEvent } from '@/lib/webhooks/deliver';
 
 export const maxDuration = 60;
 
-// Lazy initialized Supabase Admin Client
+// Lazy initialized Supabase Admin Client using SUPABASE_SERVICE_ROLE_KEY to bypass RLS completely
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let _adminClient: any = null;
 function supabaseAdmin() {
@@ -73,7 +73,7 @@ export async function GET(request: Request) {
       );
     }
 
-    // Check env verification token first
+    // 1. Check environment variable first
     const envVerifyToken = process.env.META_VERIFY_TOKEN;
     if (envVerifyToken && verifyToken === envVerifyToken) {
       return new Response(challenge, {
@@ -82,14 +82,14 @@ export async function GET(request: Request) {
       });
     }
 
-    // Check database messenger_config or whatsapp_config
-    const { data: configs } = await supabaseAdmin()
-      .from('whatsapp_config')
+    // 2. Check messenger_config table primary
+    const { data: mConfigs } = await supabaseAdmin()
+      .from('messenger_config')
       .select('id, verify_token');
 
     let matched = false;
-    if (configs) {
-      for (const config of configs) {
+    if (mConfigs) {
+      for (const config of mConfigs) {
         if (!config.verify_token) continue;
         let tokenPlain = config.verify_token;
         try {
@@ -104,13 +104,21 @@ export async function GET(request: Request) {
       }
     }
 
+    // 3. Check whatsapp_config table fallback
     if (!matched) {
-      const { data: mConfigs } = await supabaseAdmin()
-        .from('messenger_config')
+      const { data: wConfigs } = await supabaseAdmin()
+        .from('whatsapp_config')
         .select('id, verify_token');
-      if (mConfigs) {
-        for (const config of mConfigs) {
-          if (config.verify_token === verifyToken) {
+      if (wConfigs) {
+        for (const config of wConfigs) {
+          if (!config.verify_token) continue;
+          let tokenPlain = config.verify_token;
+          try {
+            tokenPlain = decrypt(config.verify_token);
+          } catch {
+            // fallback
+          }
+          if (tokenPlain === verifyToken || config.verify_token === verifyToken) {
             matched = true;
             break;
           }
@@ -130,7 +138,7 @@ export async function GET(request: Request) {
       { status: 403 }
     );
   } catch (error) {
-    console.error('Error in Messenger webhook GET verification:', error);
+    console.error('[messenger-webhook] Error in GET verification:', error);
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }
@@ -146,34 +154,64 @@ export async function POST(request: Request) {
   let body: { object?: string; entry?: MessengerWebhookEntry[] };
   try {
     body = JSON.parse(rawBody);
-  } catch {
+  } catch (err) {
+    console.error('[messenger-webhook] Error parsing raw JSON body:', err);
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
   }
 
+  // FIRST STEP: Instantly dump raw incoming payload to `webhook_events` table
+  try {
+    const isMsg = !!body.entry?.[0]?.messaging?.[0]?.message;
+    const isPb = !!body.entry?.[0]?.messaging?.[0]?.postback;
+    const eventType = isMsg ? 'message' : (isPb ? 'postback' : 'raw_webhook');
+
+    await supabaseAdmin()
+      .from('webhook_events')
+      .insert({
+        provider: 'messenger',
+        event_type: eventType,
+        payload: body,
+        status: 'received',
+      });
+    console.log('[messenger-webhook] Logged raw payload into webhook_events table');
+  } catch (logErr) {
+    console.error('[messenger-webhook] Failed to write raw payload to webhook_events:', logErr);
+    // Non-blocking: continue processing even if raw payload logging fails
+  }
+
+  // Lookup App Secret for signature verification
   let customSecret: string | null = null;
   const pageId = body.entry?.[0]?.id;
 
   if (pageId) {
-    const { data: wConfig } = await supabaseAdmin()
-      .from('whatsapp_config')
-      .select('waba_id')
-      .eq('phone_number_id', pageId)
-      .maybeSingle();
-    
-    if (wConfig?.waba_id) {
-      customSecret = wConfig.waba_id;
-    } else {
+    try {
       const { data: mConfig } = await supabaseAdmin()
         .from('messenger_config')
         .select('app_secret')
         .eq('page_id', pageId)
         .maybeSingle();
-      if (mConfig?.app_secret) customSecret = mConfig.app_secret;
+
+      if (mConfig?.app_secret) {
+        try {
+          customSecret = decrypt(mConfig.app_secret);
+        } catch {
+          customSecret = mConfig.app_secret;
+        }
+      } else {
+        const { data: wConfig } = await supabaseAdmin()
+          .from('whatsapp_config')
+          .select('waba_id')
+          .eq('phone_number_id', pageId)
+          .maybeSingle();
+        if (wConfig?.waba_id) customSecret = wConfig.waba_id;
+      }
+    } catch (err) {
+      console.error('[messenger-webhook] Error looking up app secret:', err);
     }
   }
 
   if (!verifyMetaWebhookSignature(rawBody, signature, customSecret)) {
-    console.warn('[messenger-webhook] invalid signature');
+    console.warn('[messenger-webhook] Invalid Meta webhook signature');
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
   }
 
@@ -182,13 +220,10 @@ export async function POST(request: Request) {
   }
 
   try {
-    console.log('[messenger-webhook] Processing webhook payload:', JSON.stringify(body.entry).substring(0, 500));
-    // Explicitly await processing to guarantee DB inserts complete before responding 200 OK
-    // (Otherwise, Vercel may freeze/kill the Lambda instantly)
+    console.log('[messenger-webhook] Processing webhook payload for page:', pageId);
     await processMessengerWebhook(body.entry!);
   } catch (error) {
-    console.error('[messenger-webhook] Unhandled error during processing:', error);
-    // Even if processing fails, we must return 200 OK so Meta doesn't disable the webhook
+    console.error('[messenger-webhook] Unhandled error during webhook processing:', error);
   }
 
   return NextResponse.json({ status: 'received' }, { status: 200 });
@@ -198,30 +233,48 @@ async function processMessengerWebhook(entries: MessengerWebhookEntry[]) {
   for (const entry of entries) {
     const pageId = entry.id;
 
-    // Lookup config by page_id / phone_number_id in whatsapp_config or messenger_config
+    // Lookup configuration primary from messenger_config, fallback to whatsapp_config
     let config: any = null;
-    const { data: wConfig } = await supabaseAdmin()
-      .from('whatsapp_config')
-      .select('*')
-      .eq('phone_number_id', pageId)
-      .maybeSingle();
-
-    if (wConfig) {
-      config = wConfig;
-      if (wConfig.access_token) {
-        try {
-          config.access_token = decrypt(wConfig.access_token);
-        } catch {
-          // fallback
-        }
-      }
-    } else {
-      const { data: mConfig } = await supabaseAdmin()
+    try {
+      const { data: mConfig, error: mErr } = await supabaseAdmin()
         .from('messenger_config')
         .select('*')
         .eq('page_id', pageId)
         .maybeSingle();
-      config = mConfig;
+
+      if (mErr) {
+        console.error('[messenger-webhook] Error querying messenger_config:', mErr);
+      }
+
+      if (mConfig) {
+        config = { ...mConfig };
+        if (mConfig.access_token) {
+          try {
+            config.access_token = decrypt(mConfig.access_token);
+          } catch {
+            config.access_token = mConfig.access_token;
+          }
+        }
+      } else {
+        const { data: wConfig } = await supabaseAdmin()
+          .from('whatsapp_config')
+          .select('*')
+          .eq('phone_number_id', pageId)
+          .maybeSingle();
+
+        if (wConfig) {
+          config = { ...wConfig };
+          if (wConfig.access_token) {
+            try {
+              config.access_token = decrypt(wConfig.access_token);
+            } catch {
+              config.access_token = wConfig.access_token;
+            }
+          }
+        }
+      }
+    } catch (configErr) {
+      console.error('[messenger-webhook] Exception fetching config:', configErr);
     }
 
     for (const event of entry.messaging || []) {
@@ -247,18 +300,21 @@ async function handleMessagingEvent(
 
   // 1. Delivery Receipts
   if (event.delivery) {
-    for (const mid of event.delivery.mids || []) {
-      await supabaseAdmin()
-        .from('messages')
-        .update({ status: 'delivered' })
-        .eq('message_id', mid);
+    try {
+      for (const mid of event.delivery.mids || []) {
+        await supabaseAdmin()
+          .from('messages')
+          .update({ status: 'delivered' })
+          .eq('message_id', mid);
+      }
+    } catch (err) {
+      console.error('[messenger-webhook] Error updating delivery receipt:', err);
     }
     return;
   }
 
   // 2. Read Receipts
   if (event.read) {
-    // Read receipts update status in conversation
     return;
   }
 
@@ -281,7 +337,10 @@ async function handleMessagingEvent(
     pageAccessToken,
   });
 
-  if (!contact) return;
+  if (!contact) {
+    console.error('[messenger-webhook] Failed to find or create contact for PSID:', senderPsid);
+    return;
+  }
 
   // Find or create Conversation
   const conversation = await findOrCreateMessengerConversation({
@@ -291,7 +350,10 @@ async function handleMessagingEvent(
     psid: senderPsid,
   });
 
-  if (!conversation) return;
+  if (!conversation) {
+    console.error('[messenger-webhook] Failed to find or create conversation for contactId:', contact.id);
+    return;
+  }
 
   // Extract content
   let contentText = '';
@@ -369,58 +431,74 @@ async function handleMessagingEvent(
   }
 
   // Dispatch webhooks & automations
-  if (accountId) {
-    await dispatchWebhookEvent(supabaseAdmin(), accountId, 'message.received', {
-      message_id: insertedMsg.id,
-      conversation_id: conversation.id,
-      contact_id: contact.id,
-      psid: senderPsid,
-      content_text: contentText,
-    });
+  if (accountId && insertedMsg) {
+    try {
+      await dispatchWebhookEvent(supabaseAdmin(), accountId, 'message.received', {
+        message_id: insertedMsg.id,
+        conversation_id: conversation.id,
+        contact_id: contact.id,
+        psid: senderPsid,
+        content_text: contentText,
+      });
+    } catch (err) {
+      console.error('[messenger-webhook] Error dispatching webhook event:', err);
+    }
 
     // Run Automations Engine
-    void runAutomationsForTrigger({
-      triggerType: 'new_message_received',
-      accountId,
-      contactId: contact.id,
-      context: {
-        conversation_id: conversation.id,
-        message_text: contentText,
-      }
-    });
+    try {
+      void runAutomationsForTrigger({
+        triggerType: 'new_message_received',
+        accountId,
+        contactId: contact.id,
+        context: {
+          conversation_id: conversation.id,
+          message_text: contentText,
+        }
+      });
+    } catch (err) {
+      console.error('[messenger-webhook] Error running automations:', err);
+    }
 
     // Run Flows Engine
-    void dispatchInboundToFlows({
-      accountId,
-      userId: userId || '00000000-0000-0000-0000-000000000000',
-      contactId: contact.id,
-      conversationId: conversation.id,
-      isFirstInboundMessage: (conversation.unread_count || 0) === 0,
-      message: isPostback ? {
-          kind: 'interactive_reply',
-          reply_id: event.postback!.payload,
-          reply_title: event.postback!.title,
-          meta_message_id: messageId
-      } : event.message?.quick_reply ? {
-          kind: 'interactive_reply',
-          reply_id: event.message.quick_reply.payload,
-          reply_title: event.message.text || '',
-          meta_message_id: messageId
-      } : {
-          kind: 'text',
-          text: contentText,
-          meta_message_id: messageId
-      }
-    });
+    try {
+      void dispatchInboundToFlows({
+        accountId,
+        userId: userId || '00000000-0000-0000-0000-000000000000',
+        contactId: contact.id,
+        conversationId: conversation.id,
+        isFirstInboundMessage: (conversation.unread_count || 0) === 0,
+        message: isPostback ? {
+            kind: 'interactive_reply',
+            reply_id: event.postback!.payload,
+            reply_title: event.postback!.title,
+            meta_message_id: messageId
+        } : event.message?.quick_reply ? {
+            kind: 'interactive_reply',
+            reply_id: event.message.quick_reply.payload,
+            reply_title: event.message.text || '',
+            meta_message_id: messageId
+        } : {
+            kind: 'text',
+            text: contentText,
+            meta_message_id: messageId
+        }
+      });
+    } catch (err) {
+      console.error('[messenger-webhook] Error dispatching flows:', err);
+    }
 
     // Run AI Auto-Reply Assistant
-    void dispatchInboundToAiReply({
-      accountId,
-      contactId: contact.id,
-      configOwnerUserId: userId || '00000000-0000-0000-0000-000000000000',
-      conversationId: conversation.id,
-      inboundMessageId: messageId,
-    });
+    try {
+      void dispatchInboundToAiReply({
+        accountId,
+        contactId: contact.id,
+        configOwnerUserId: userId || '00000000-0000-0000-0000-000000000000',
+        conversationId: conversation.id,
+        inboundMessageId: messageId,
+      });
+    } catch (err) {
+      console.error('[messenger-webhook] Error dispatching AI auto-reply:', err);
+    }
   }
 }
 
@@ -433,27 +511,35 @@ async function findOrCreateMessengerContact(params: {
   const { psid, userId, pageAccessToken } = params;
 
   // Lookup existing contact by PSID
-  const { data: existing } = await supabaseAdmin()
-    .from('contacts')
-    .select('*')
-    .eq('psid', psid)
-    .maybeSingle();
+  try {
+    const { data: existing } = await supabaseAdmin()
+      .from('contacts')
+      .select('*')
+      .eq('psid', psid)
+      .maybeSingle();
 
-  if (existing) return existing;
+    if (existing) return existing;
+  } catch (err) {
+    console.error('[messenger-webhook] Error looking up contact by PSID:', err);
+  }
 
   // Fetch Facebook Profile details if token available
   let name = `Messenger User (${psid.slice(-4)})`;
   let avatarUrl: string | undefined;
 
   if (pageAccessToken) {
-    const profile = await fetchMessengerUserProfile(psid, pageAccessToken);
-    if (profile) {
-      if (profile.first_name || profile.last_name) {
-        name = [profile.first_name, profile.last_name].filter(Boolean).join(' ');
+    try {
+      const profile = await fetchMessengerUserProfile(psid, pageAccessToken);
+      if (profile) {
+        if (profile.first_name || profile.last_name) {
+          name = [profile.first_name, profile.last_name].filter(Boolean).join(' ');
+        }
+        if (profile.profile_pic) {
+          avatarUrl = profile.profile_pic;
+        }
       }
-      if (profile.profile_pic) {
-        avatarUrl = profile.profile_pic;
-      }
+    } catch (profileErr) {
+      console.error('[messenger-webhook] Error fetching user profile from Meta Graph API:', profileErr);
     }
   }
 
@@ -490,13 +576,17 @@ async function findOrCreateMessengerConversation(params: {
 }) {
   const { contactId, userId, psid } = params;
 
-  const { data: existing } = await supabaseAdmin()
-    .from('conversations')
-    .select('*')
-    .eq('contact_id', contactId)
-    .maybeSingle();
+  try {
+    const { data: existing } = await supabaseAdmin()
+      .from('conversations')
+      .select('*')
+      .eq('contact_id', contactId)
+      .maybeSingle();
 
-  if (existing) return existing;
+    if (existing) return existing;
+  } catch (err) {
+    console.error('[messenger-webhook] Error looking up conversation:', err);
+  }
 
   try {
     const { data: created, error } = await supabaseAdmin()
