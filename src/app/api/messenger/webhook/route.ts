@@ -275,6 +275,7 @@ async function handleMessagingEvent(
   const contact = await findOrCreateMessengerContact({
     psid: senderPsid,
     userId,
+    accountId,
     pageAccessToken,
   });
 
@@ -284,6 +285,7 @@ async function handleMessagingEvent(
   const conversation = await findOrCreateMessengerConversation({
     contactId: contact.id,
     userId,
+    accountId,
     psid: senderPsid,
   });
 
@@ -318,6 +320,7 @@ async function handleMessagingEvent(
     .from('messages')
     .insert({
       conversation_id: conversation.id,
+      account_id: accountId,
       sender_type: 'customer',
       content_type: contentType,
       content_text: contentText,
@@ -407,6 +410,7 @@ async function handleMessagingEvent(
 async function findOrCreateMessengerContact(params: {
   psid: string;
   userId?: string;
+  accountId?: string;
   pageAccessToken?: string;
 }) {
   const { psid, userId, pageAccessToken } = params;
@@ -441,6 +445,7 @@ async function findOrCreateMessengerContact(params: {
     .from('contacts')
     .insert({
       user_id: userId || '00000000-0000-0000-0000-000000000000',
+      account_id: params.accountId,
       psid,
       name,
       avatar_url: avatarUrl,
@@ -459,6 +464,7 @@ async function findOrCreateMessengerContact(params: {
 async function findOrCreateMessengerConversation(params: {
   contactId: string;
   userId?: string;
+  accountId?: string;
   psid: string;
 }) {
   const { contactId, userId, psid } = params;
@@ -475,6 +481,7 @@ async function findOrCreateMessengerConversation(params: {
     .from('conversations')
     .insert({
       user_id: userId || '00000000-0000-0000-0000-000000000000',
+      account_id: params.accountId,
       contact_id: contactId,
       psid,
       status: 'open',
