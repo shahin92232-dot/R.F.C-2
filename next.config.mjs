@@ -34,20 +34,6 @@ const SECURITY_HEADERS = [
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
-  experimental: {
-    allowedDevOrigins: [
-      "*.ngrok-free.app",
-      "*.ngrok.app",
-      "*.ngrok.io",
-      "*.trycloudflare.com",
-      "*.loca.lt",
-      ...(process.env.ALLOWED_DEV_ORIGINS
-        ? process.env.ALLOWED_DEV_ORIGINS.split(",")
-            .map((origin) => origin.trim())
-            .filter(Boolean)
-        : []),
-    ],
-  },
   async headers() {
     return [
       {

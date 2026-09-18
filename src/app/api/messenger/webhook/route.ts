@@ -297,26 +297,46 @@ async function handleMessagingEvent(
 
     // Run Automations Engine
     void runAutomationsForTrigger({
-      trigger: 'message_received',
+      triggerType: 'new_message_received',
       accountId,
       contactId: contact.id,
-      conversationId: conversation.id,
-      messageText: contentText,
+      context: {
+        conversation_id: conversation.id,
+        message_text: contentText,
+      }
     });
 
     // Run Flows Engine
     void dispatchInboundToFlows({
       accountId,
+      userId: userId || '00000000-0000-0000-0000-000000000000',
       contactId: contact.id,
       conversationId: conversation.id,
-      messageText: contentText,
+      isFirstInboundMessage: (conversation.unread_count || 0) === 0,
+      message: isPostback ? {
+          kind: 'interactive_reply',
+          reply_id: event.postback!.payload,
+          reply_title: event.postback!.title,
+          meta_message_id: messageId
+      } : event.message?.quick_reply ? {
+          kind: 'interactive_reply',
+          reply_id: event.message.quick_reply.payload,
+          reply_title: event.message.text || '',
+          meta_message_id: messageId
+      } : {
+          kind: 'text',
+          text: contentText,
+          meta_message_id: messageId
+      }
     });
 
     // Run AI Auto-Reply Assistant
     void dispatchInboundToAiReply({
       accountId,
+      contactId: contact.id,
+      configOwnerUserId: userId || '00000000-0000-0000-0000-000000000000',
       conversationId: conversation.id,
-      messageText: contentText,
+      inboundMessageId: messageId,
     });
   }
 }

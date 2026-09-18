@@ -1,5 +1,8 @@
 'use client';
 
+export const dynamic = 'force-dynamic';
+
+
 // ============================================================
 // /join/[token] — invitation redemption landing page.
 //
