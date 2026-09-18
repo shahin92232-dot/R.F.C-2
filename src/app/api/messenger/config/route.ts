@@ -146,18 +146,19 @@ export async function POST(request: Request) {
 
     // Encrypt token
     const encryptedAccessToken = encrypt(access_token.trim());
-    const encryptedVerifyToken = verify_token ? encrypt(verify_token.trim()) : null;
-
-    const baseRow = {
+    const baseRow: any = {
       phone_number_id: phone_number_id.trim(),
       waba_id: waba_id ? waba_id.trim() : null,
       access_token: encryptedAccessToken,
-      verify_token: encryptedVerifyToken,
       status: 'connected',
       connected_at: new Date().toISOString(),
       registered_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
+
+    if (verify_token) {
+      baseRow.verify_token = encrypt(verify_token.trim());
+    }
 
     const { data: existing } = await supabase
       .from('whatsapp_config')
