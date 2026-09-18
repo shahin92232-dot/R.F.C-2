@@ -5,6 +5,7 @@ import { Plus, Trash2, ShoppingBag, Image as ImageIcon, DollarSign, Package } fr
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { CURRENCIES, formatCurrency } from "@/lib/currency";
 import {
   Card,
   CardContent,
@@ -45,8 +46,20 @@ export default function ProductsPage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [price, setPrice] = useState("");
+  const [currency, setCurrency] = useState("BDT");
   const [imageUrl, setImageUrl] = useState("");
   const [sku, setSku] = useState("");
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const result = event.target?.result as string;
+      if (result) setImageUrl(result);
+    };
+    reader.readAsDataURL(file);
+  };
 
   const fetchProducts = async () => {
     try {
@@ -80,6 +93,7 @@ export default function ProductsPage() {
           title,
           description,
           price: parseFloat(price),
+          currency,
           image_url: imageUrl,
           sku,
         }),
@@ -90,6 +104,7 @@ export default function ProductsPage() {
         setTitle("");
         setDescription("");
         setPrice("");
+        setCurrency("BDT");
         setImageUrl("");
         setSku("");
         await fetchProducts();
@@ -155,10 +170,27 @@ export default function ProductsPage() {
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="grid gap-2">
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="col-span-1 grid gap-2">
+                    <label htmlFor="currency" className="text-sm font-medium">
+                      Currency *
+                    </label>
+                    <select
+                      id="currency"
+                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                      value={currency}
+                      onChange={(e) => setCurrency(e.target.value)}
+                    >
+                      {CURRENCIES.map((c) => (
+                        <option key={c.code} value={c.code}>
+                          {c.code} ({c.symbol})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="col-span-1 grid gap-2">
                     <label htmlFor="price" className="text-sm font-medium">
-                      Price ($) *
+                      Price *
                     </label>
                     <Input
                       id="price"
@@ -170,9 +202,9 @@ export default function ProductsPage() {
                       required
                     />
                   </div>
-                  <div className="grid gap-2">
+                  <div className="col-span-1 grid gap-2">
                     <label htmlFor="sku" className="text-sm font-medium">
-                      SKU Code (Optional)
+                      SKU (Optional)
                     </label>
                     <Input
                       id="sku"
@@ -185,16 +217,28 @@ export default function ProductsPage() {
 
                 <div className="grid gap-2">
                   <label htmlFor="imageUrl" className="text-sm font-medium">
-                    Image URL
+                    Product Image (URL Import or File Upload)
                   </label>
-                  <Input
-                    id="imageUrl"
-                    placeholder="https://images.unsplash.com/photo-1505740420928-5e560c06d30e"
-                    value={imageUrl}
-                    onChange={(e) => setImageUrl(e.target.value)}
-                  />
+                  <div className="flex gap-2">
+                    <Input
+                      id="imageUrl"
+                      placeholder="Paste Image URL (https://...)"
+                      value={imageUrl}
+                      onChange={(e) => setImageUrl(e.target.value)}
+                      className="flex-1"
+                    />
+                    <label className="cursor-pointer inline-flex items-center justify-center rounded-md text-xs font-medium border border-input bg-background px-3 py-2 hover:bg-accent hover:text-accent-foreground">
+                      Upload
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={handleFileUpload}
+                      />
+                    </label>
+                  </div>
                   {imageUrl && (
-                    <div className="mt-2 h-32 w-full rounded-md border border-border overflow-hidden bg-muted flex items-center justify-center">
+                    <div className="mt-2 h-36 w-full rounded-md border border-border overflow-hidden bg-muted flex items-center justify-center relative group">
                       <img
                         src={imageUrl}
                         alt="Product Preview"
@@ -203,6 +247,15 @@ export default function ProductsPage() {
                           (e.target as HTMLImageElement).style.display = "none";
                         }}
                       />
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="xs"
+                        className="absolute top-2 right-2 opacity-80 hover:opacity-100"
+                        onClick={() => setImageUrl("")}
+                      >
+                        Remove
+                      </Button>
                     </div>
                   )}
                 </div>
@@ -281,7 +334,7 @@ export default function ProductsPage() {
                     </div>
                   )}
                   <div className="absolute top-2 right-2 bg-background/90 backdrop-blur-sm px-2.5 py-1 rounded-full text-xs font-semibold text-foreground border border-border">
-                    ${product.price.toFixed(2)} {product.currency}
+                    {formatCurrency(product.price, product.currency)}
                   </div>
                 </div>
 

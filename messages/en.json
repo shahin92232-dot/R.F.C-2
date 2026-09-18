@@ -135,7 +135,7 @@
   },
   "Inbox": {
     "page": {
-      "whatsappNotConnected": "WhatsApp® is not connected. Go to Settings to connect your account."
+      "whatsappNotConnected": "Facebook Messenger is not connected. Go to Settings to connect your account."
     },
     "conversationList": {
       "searchPlaceholder": "Search conversations...",
