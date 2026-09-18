@@ -53,15 +53,18 @@ export async function GET() {
     try {
       pageAccessToken = decrypt(config.access_token);
     } catch {
-      return NextResponse.json(
-        {
-          connected: false,
-          reason: 'token_corrupted',
-          needs_reset: true,
-          message: 'Page Access Token decryption failed. Please reset and re-enter.',
+      return NextResponse.json({
+        connected: false,
+        reason: 'token_corrupted',
+        needs_reset: true,
+        message: 'Page Access Token decryption failed. Please reset and re-enter.',
+        saved_config: {
+          pageId: config.phone_number_id,
+          appSecretSaved: !!config.waba_id,
+          accessTokenSaved: false,
+          verifyTokenSaved: !!config.verify_token,
         },
-        { status: 200 }
-      );
+      });
     }
 
     // Ping Meta Graph API to verify Facebook Page Access Token
@@ -72,15 +75,18 @@ export async function GET() {
 
     if (!graphRes.ok) {
       const errData = await graphRes.json().catch(() => ({}));
-      return NextResponse.json(
-        {
-          connected: false,
-          reason: 'meta_api_error',
-          message: errData.error?.message || 'Meta Graph API validation failed',
-          meta: errData.error || null,
+      return NextResponse.json({
+        connected: false,
+        reason: 'meta_api_error',
+        message: errData.error?.message || 'Meta Graph API validation failed',
+        meta: errData.error || null,
+        saved_config: {
+          pageId: config.phone_number_id,
+          appSecretSaved: !!config.waba_id,
+          accessTokenSaved: !!config.access_token,
+          verifyTokenSaved: !!config.verify_token,
         },
-        { status: 200 }
-      );
+      });
     }
 
     const pageData = await graphRes.json();
@@ -89,6 +95,13 @@ export async function GET() {
       page_info: { id: pageData.id, name: pageData.name },
       phone_info: { verified_name: pageData.name },
       verify_token_saved: !!config.verify_token,
+      saved_config: {
+        pageId: config.phone_number_id,
+        appSecretSaved: !!config.waba_id,
+        accessTokenSaved: !!config.access_token,
+        verifyTokenSaved: !!config.verify_token,
+        pageName: pageData.name,
+      },
     });
   } catch (error) {
     console.error('Error in GET /api/messenger/config:', error);
