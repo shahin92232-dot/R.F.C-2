@@ -181,13 +181,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ status: 'ignored' }, { status: 200 });
   }
 
-  after(async () => {
-    try {
-      await processMessengerWebhook(body.entry!);
-    } catch (error) {
-      console.error('Error processing Messenger webhook:', error);
-    }
-  });
+  try {
+    console.log('[messenger-webhook] Processing webhook payload:', JSON.stringify(body.entry).substring(0, 500));
+    // Explicitly await processing to guarantee DB inserts complete before responding 200 OK
+    // (Otherwise, Vercel may freeze/kill the Lambda instantly)
+    await processMessengerWebhook(body.entry!);
+  } catch (error) {
+    console.error('[messenger-webhook] Unhandled error during processing:', error);
+    // Even if processing fails, we must return 200 OK so Meta doesn't disable the webhook
+  }
 
   return NextResponse.json({ status: 'received' }, { status: 200 });
 }
@@ -316,40 +318,55 @@ async function handleMessagingEvent(
   }
 
   // Insert inbound message into DB
-  const { data: insertedMsg, error: msgError } = await supabaseAdmin()
-    .from('messages')
-    .insert({
-      conversation_id: conversation.id,
-      account_id: accountId,
-      sender_type: 'customer',
-      content_type: contentType,
-      content_text: contentText,
-      media_url: mediaUrl,
-      message_id: messageId,
-      status: 'sent',
-    })
-    .select()
-    .single();
+  let insertedMsg: any = null;
+  try {
+    const { data: newMsg, error: msgError } = await supabaseAdmin()
+      .from('messages')
+      .insert({
+        conversation_id: conversation.id,
+        account_id: accountId,
+        sender_type: 'customer',
+        content_type: contentType,
+        content_text: contentText,
+        media_url: mediaUrl,
+        message_id: messageId,
+        status: 'sent',
+      })
+      .select()
+      .single();
 
-  if (msgError) {
-    console.error('Error inserting inbound Messenger message:', msgError);
+    if (msgError) {
+      console.error('[messenger-webhook] DB Error inserting message:', msgError);
+      return;
+    }
+    insertedMsg = newMsg;
+  } catch (err) {
+    console.error('[messenger-webhook] Exception inserting message:', err);
     return;
   }
 
   const nowIso = new Date().toISOString();
 
   // Update conversation last_message, unread_count, and last_inbound_at (24-hour window)
-  await supabaseAdmin()
-    .from('conversations')
-    .update({
-      last_message_text: contentText,
-      last_message_at: nowIso,
-      last_inbound_at: nowIso,
-      unread_count: (conversation.unread_count || 0) + 1,
-      status: 'open',
-      updated_at: nowIso,
-    })
-    .eq('id', conversation.id);
+  try {
+    const { error: convUpdateErr } = await supabaseAdmin()
+      .from('conversations')
+      .update({
+        last_message_text: contentText,
+        last_message_at: nowIso,
+        last_inbound_at: nowIso,
+        unread_count: (conversation.unread_count || 0) + 1,
+        status: 'open',
+        updated_at: nowIso,
+      })
+      .eq('id', conversation.id);
+
+    if (convUpdateErr) {
+      console.error('[messenger-webhook] DB Error updating conversation:', convUpdateErr);
+    }
+  } catch (err) {
+    console.error('[messenger-webhook] Exception updating conversation:', err);
+  }
 
   // Dispatch webhooks & automations
   if (accountId) {
@@ -441,24 +458,28 @@ async function findOrCreateMessengerContact(params: {
   }
 
   // Create new contact
-  const { data: created, error } = await supabaseAdmin()
-    .from('contacts')
-    .insert({
-      user_id: userId || '00000000-0000-0000-0000-000000000000',
-      account_id: params.accountId,
-      psid,
-      name,
-      avatar_url: avatarUrl,
-    })
-    .select()
-    .single();
+  try {
+    const { data: created, error } = await supabaseAdmin()
+      .from('contacts')
+      .insert({
+        user_id: userId || '00000000-0000-0000-0000-000000000000',
+        account_id: params.accountId,
+        psid,
+        name,
+        avatar_url: avatarUrl,
+      })
+      .select()
+      .single();
 
-  if (error) {
-    console.error('Error creating contact for PSID:', psid, error);
+    if (error) {
+      console.error('[messenger-webhook] DB Error inserting contact:', error);
+      return null;
+    }
+    return created;
+  } catch (err) {
+    console.error('[messenger-webhook] Exception in findOrCreateMessengerContact:', err);
     return null;
   }
-
-  return created;
 }
 
 async function findOrCreateMessengerConversation(params: {
@@ -477,22 +498,27 @@ async function findOrCreateMessengerConversation(params: {
 
   if (existing) return existing;
 
-  const { data: created, error } = await supabaseAdmin()
-    .from('conversations')
-    .insert({
-      user_id: userId || '00000000-0000-0000-0000-000000000000',
-      account_id: params.accountId,
-      contact_id: contactId,
-      psid,
-      status: 'open',
-    })
-    .select()
-    .single();
+  try {
+    const { data: created, error } = await supabaseAdmin()
+      .from('conversations')
+      .insert({
+        user_id: userId || '00000000-0000-0000-0000-000000000000',
+        account_id: params.accountId,
+        contact_id: contactId,
+        psid,
+        status: 'open',
+      })
+      .select()
+      .single();
 
-  if (error) {
-    console.error('Error creating conversation for contactId:', contactId, error);
+    if (error) {
+      console.error('[messenger-webhook] DB Error creating conversation:', error);
+      return null;
+    }
+
+    return created;
+  } catch (err) {
+    console.error('[messenger-webhook] Exception in findOrCreateMessengerConversation:', err);
     return null;
   }
-
-  return created;
 }
