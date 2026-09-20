@@ -289,233 +289,239 @@ async function handleMessagingEvent(
   pageId: string,
   config: any
 ) {
-  const senderPsid = event.sender?.id;
-  const recipientId = event.recipient?.id;
-
-  if (!senderPsid || !recipientId) return;
-
-  // Determine user/account context
-  const accountId = config?.account_id || config?.user_id;
-  const userId = config?.user_id;
-  const pageAccessToken = config?.access_token || process.env.META_PAGE_ACCESS_TOKEN;
-
-  // 1. Delivery Receipts
-  if (event.delivery) {
-    try {
-      for (const mid of event.delivery.mids || []) {
-        await supabaseAdmin()
-          .from('messages')
-          .update({ status: 'delivered' })
-          .eq('message_id', mid);
-      }
-    } catch (err) {
-      console.error('[messenger-webhook] Error updating delivery receipt:', err);
-    }
-    return;
-  }
-
-  // 2. Read Receipts
-  if (event.read) {
-    return;
-  }
-
-  // 3. Inbound Message, Postback, or Admin Echo Message
-  const isPostback = !!event.postback;
-  const isMessage = !!event.message;
-  const isEcho = !!event.message?.is_echo;
-
-  if (isEcho) {
-    console.log("IS_ECHO EVENT DETECTED:", JSON.stringify(event.message, null, 2));
-  }
-
-  // For echoes, sender.id is Page ID and recipient.id is Customer PSID.
-  // For incoming customer messages, sender.id is Customer PSID and recipient.id is Page ID.
-  const customerPsid = isEcho ? recipientId : senderPsid;
-
-  // Determine message direction
-  const configuredPageId = config?.page_id || pageId;
-  const isFromCustomer = !isEcho && (senderPsid !== configuredPageId);
-  const senderType = isFromCustomer ? 'customer' : 'agent';
-  const direction = isFromCustomer ? 'inbound' : 'outbound';
-
-  // Find or create Contact by PSID (Customer PSID)
-  const contact = await findOrCreateMessengerContact({
-    psid: customerPsid,
-    userId,
-    accountId,
-    pageAccessToken,
-  });
-
-  if (!contact) {
-    console.error('[messenger-webhook] Failed to find or create contact for PSID:', customerPsid);
-    return;
-  }
-
-  // Find or create Conversation
-  const conversation = await findOrCreateMessengerConversation({
-    contactId: contact.id,
-    userId,
-    accountId,
-    psid: customerPsid,
-  });
-
-  if (!conversation) {
-    console.error('[messenger-webhook] Failed to find or create conversation for contactId:', contact.id);
-    return;
-  }
-
-  // Extract content
-  let contentText = '';
-  let contentType = 'text';
-  let mediaUrl: string | null = null;
-  const messageId = event.message?.mid || `pb_${event.timestamp}_${senderPsid}`;
-
-  if (isPostback) {
-    contentText = event.postback?.title || event.postback?.payload || 'Postback';
-    contentType = 'interactive';
-  } else if (event.message) {
-    if (event.message.quick_reply) {
-      contentText = event.message.quick_reply.payload || event.message.text || '';
-      contentType = 'interactive';
-    } else if (event.message.text) {
-      contentText = event.message.text;
-      contentType = 'text';
-    } else if (event.message.attachments && event.message.attachments.length > 0) {
-      const att = event.message.attachments[0];
-      contentType = att.type === 'fallback' ? 'text' : att.type;
-      mediaUrl = att.payload?.url || null;
-      contentText = att.payload?.title || `[${contentType}]`;
-    }
-  }
-
-  // Insert message into DB with explicit directional flags
-  let insertedMsg: any = null;
   try {
-    const { data: newMsg, error: msgError } = await supabaseAdmin()
-      .from('messages')
-      .insert({
-        conversation_id: conversation.id,
-        account_id: accountId,
-        sender_type: senderType,
-        is_from_customer: isFromCustomer,
-        direction: direction,
-        content_type: contentType,
-        content_text: contentText,
-        media_url: mediaUrl,
-        message_id: messageId,
-        status: 'sent',
-      })
-      .select()
-      .single();
+    const senderPsid = event.sender?.id;
+    const recipientId = event.recipient?.id;
 
-    if (msgError) {
-      console.error('[messenger-webhook] DB Error inserting message:', msgError);
+    if (!senderPsid || !recipientId) return;
+
+    // Determine user/account context
+    const accountId = config?.account_id || config?.user_id;
+    const userId = config?.user_id;
+    const pageAccessToken = config?.access_token || process.env.META_PAGE_ACCESS_TOKEN;
+
+    // 1. Delivery Receipts
+    if (event.delivery) {
+      try {
+        for (const mid of event.delivery.mids || []) {
+          await supabaseAdmin()
+            .from('messages')
+            .update({ status: 'delivered' })
+            .eq('message_id', mid);
+        }
+      } catch (err) {
+        console.error('[messenger-webhook] Error updating delivery receipt:', err);
+      }
       return;
     }
-    insertedMsg = newMsg;
-  } catch (err) {
-    console.error('[messenger-webhook] Exception inserting message:', err);
-    return;
-  }
 
-  const nowIso = new Date().toISOString();
-
-  // Update conversation last_message, unread_count, and last_inbound_at / last_customer_message_at
-  try {
-    const updatePayload: any = {
-      last_message_text: contentText,
-      last_message_at: nowIso,
-      updated_at: nowIso,
-    };
-
-    if (isFromCustomer) {
-      updatePayload.last_inbound_at = nowIso;
-      updatePayload.last_customer_message_at = nowIso;
-      updatePayload.unread_count = (conversation.unread_count || 0) + 1;
-      updatePayload.status = 'open';
+    // 2. Read Receipts
+    if (event.read) {
+      return;
     }
 
-    const { error: convUpdateErr } = await supabaseAdmin()
-      .from('conversations')
-      .update(updatePayload)
-      .eq('id', conversation.id);
+    // 3. Inbound Message, Postback, or Admin Echo Message
+    const isPostback = !!event.postback;
+    const isMessage = !!event.message;
+    const isEcho = !!event.message?.is_echo;
 
-    if (convUpdateErr) {
-      console.error('[messenger-webhook] DB Error updating conversation:', convUpdateErr);
+    if (isEcho) {
+      console.log("IS_ECHO EVENT DETECTED:", JSON.stringify(event.message, null, 2));
     }
-  } catch (err) {
-    console.error('[messenger-webhook] Exception updating conversation:', err);
-  }
 
-  // Dispatch webhooks & automations
-  if (accountId && insertedMsg) {
+    // For echoes, sender.id is Page ID and recipient.id is Customer PSID.
+    // For incoming customer messages, sender.id is Customer PSID and recipient.id is Page ID.
+    const customerPsid = isEcho ? recipientId : senderPsid;
+
+    // Determine message direction
+    const configuredPageId = config?.page_id || pageId;
+    const isFromCustomer = !isEcho && (senderPsid !== configuredPageId);
+    const senderType = isFromCustomer ? 'customer' : 'agent';
+    const direction = isFromCustomer ? 'inbound' : 'outbound';
+
+    // Find or create Contact by PSID (Customer PSID)
+    const contact = await findOrCreateMessengerContact({
+      psid: customerPsid,
+      userId,
+      accountId,
+      pageAccessToken,
+    });
+
+    if (!contact) {
+      console.error('FAILED TO PROCESS MESSENGER EVENT: Failed to find or create contact for PSID:', customerPsid);
+      return;
+    }
+
+    // Find or create Conversation
+    const conversation = await findOrCreateMessengerConversation({
+      contactId: contact.id,
+      userId,
+      accountId,
+      psid: customerPsid,
+    });
+
+    if (!conversation) {
+      console.error('FAILED TO PROCESS MESSENGER EVENT: Failed to find or create conversation for contactId:', contact.id);
+      return;
+    }
+
+    // Extract content
+    let contentText = '';
+    let contentType = 'text';
+    let mediaUrl: string | null = null;
+    const messageId = event.message?.mid || `pb_${event.timestamp}_${customerPsid}`;
+
+    if (isPostback) {
+      contentText = event.postback?.title || event.postback?.payload || 'Postback';
+      contentType = 'interactive';
+    } else if (event.message) {
+      if (event.message.quick_reply) {
+        contentText = event.message.quick_reply.payload || event.message.text || '';
+        contentType = 'interactive';
+      } else if (event.message.text) {
+        contentText = event.message.text;
+        contentType = 'text';
+      } else if (event.message.attachments && event.message.attachments.length > 0) {
+        const att = event.message.attachments[0];
+        contentType = att.type === 'fallback' ? 'text' : att.type;
+        mediaUrl = att.payload?.url || null;
+        contentText = att.payload?.title || `[${contentType}]`;
+      }
+    }
+
+    // Insert message into DB with explicit directional flags
+    let insertedMsg: any = null;
     try {
-      await dispatchWebhookEvent(supabaseAdmin(), accountId, 'message.received', {
-        message_id: insertedMsg.id,
-        conversation_id: conversation.id,
-        contact_id: contact.id,
-        psid: senderPsid,
-        content_text: contentText,
-      });
-    } catch (err) {
-      console.error('[messenger-webhook] Error dispatching webhook event:', err);
-    }
-
-    // Run Automations Engine
-    try {
-      void runAutomationsForTrigger({
-        triggerType: 'new_message_received',
-        accountId,
-        contactId: contact.id,
-        context: {
+      const { data: newMsg, error: msgError } = await supabaseAdmin()
+        .from('messages')
+        .insert({
           conversation_id: conversation.id,
-          message_text: contentText,
-        }
-      });
+          account_id: accountId,
+          sender_type: senderType,
+          is_from_customer: isFromCustomer,
+          direction: direction,
+          content_type: contentType,
+          content_text: contentText,
+          media_url: mediaUrl,
+          message_id: messageId,
+          status: 'sent',
+        })
+        .select()
+        .single();
+
+      if (msgError) {
+        console.error('FAILED TO PROCESS MESSENGER EVENT: DB Error inserting message:', msgError);
+        return;
+      }
+      insertedMsg = newMsg;
     } catch (err) {
-      console.error('[messenger-webhook] Error running automations:', err);
+      console.error('FAILED TO PROCESS MESSENGER EVENT: Exception inserting message:', err);
+      return;
     }
 
-    // Run Flows Engine
+    const nowIso = new Date().toISOString();
+
+    // Update conversation last_message, unread_count, and last_inbound_at / last_customer_message_at
     try {
-      void dispatchInboundToFlows({
-        accountId,
-        userId: userId || '00000000-0000-0000-0000-000000000000',
-        contactId: contact.id,
-        conversationId: conversation.id,
-        isFirstInboundMessage: (conversation.unread_count || 0) === 0,
-        message: isPostback ? {
-            kind: 'interactive_reply',
-            reply_id: event.postback!.payload,
-            reply_title: event.postback!.title,
-            meta_message_id: messageId
-        } : event.message?.quick_reply ? {
-            kind: 'interactive_reply',
-            reply_id: event.message.quick_reply.payload,
-            reply_title: event.message.text || '',
-            meta_message_id: messageId
-        } : {
-            kind: 'text',
-            text: contentText,
-            meta_message_id: messageId
-        }
-      });
+      const updatePayload: any = {
+        last_message_text: contentText,
+        last_message_at: nowIso,
+        updated_at: nowIso,
+      };
+
+      if (isFromCustomer) {
+        updatePayload.last_inbound_at = nowIso;
+        updatePayload.last_customer_message_at = nowIso;
+        updatePayload.unread_count = (conversation.unread_count || 0) + 1;
+        updatePayload.status = 'open';
+      }
+
+      const { error: convUpdateErr } = await supabaseAdmin()
+        .from('conversations')
+        .update(updatePayload)
+        .eq('id', conversation.id);
+
+      if (convUpdateErr) {
+        console.error('FAILED TO PROCESS MESSENGER EVENT: DB Error updating conversation:', convUpdateErr);
+      }
     } catch (err) {
-      console.error('[messenger-webhook] Error dispatching flows:', err);
+      console.error('FAILED TO PROCESS MESSENGER EVENT: Exception updating conversation:', err);
     }
 
-    // Run AI Auto-Reply Assistant
-    try {
-      void dispatchInboundToAiReply({
-        accountId,
-        contactId: contact.id,
-        configOwnerUserId: userId || '00000000-0000-0000-0000-000000000000',
-        conversationId: conversation.id,
-        inboundMessageId: messageId,
-      });
-    } catch (err) {
-      console.error('[messenger-webhook] Error dispatching AI auto-reply:', err);
+    // Dispatch webhooks & automations
+    if (accountId && insertedMsg) {
+      try {
+        await dispatchWebhookEvent(supabaseAdmin(), accountId, 'message.received', {
+          message_id: insertedMsg.id,
+          conversation_id: conversation.id,
+          contact_id: contact.id,
+          psid: senderPsid,
+          content_text: contentText,
+        });
+      } catch (err) {
+        console.error('[messenger-webhook] Error dispatching webhook event:', err);
+      }
+
+      // Run Automations Engine
+      try {
+        void runAutomationsForTrigger({
+          triggerType: 'new_message_received',
+          accountId,
+          contactId: contact.id,
+          context: {
+            conversation_id: conversation.id,
+            message_text: contentText,
+          }
+        });
+      } catch (err) {
+        console.error('[messenger-webhook] Error running automations:', err);
+      }
+
+      // Run Flows Engine
+      if (isFromCustomer) {
+        try {
+          void dispatchInboundToFlows({
+            accountId,
+            userId: userId || '00000000-0000-0000-0000-000000000000',
+            contactId: contact.id,
+            conversationId: conversation.id,
+            isFirstInboundMessage: (conversation.unread_count || 0) === 0,
+            message: isPostback ? {
+                kind: 'interactive_reply',
+                reply_id: event.postback!.payload,
+                reply_title: event.postback!.title,
+                meta_message_id: messageId
+            } : event.message?.quick_reply ? {
+                kind: 'interactive_reply',
+                reply_id: event.message.quick_reply.payload,
+                reply_title: event.message.text || '',
+                meta_message_id: messageId
+            } : {
+                kind: 'text',
+                text: contentText,
+                meta_message_id: messageId
+            }
+          });
+        } catch (err) {
+          console.error('[messenger-webhook] Error dispatching flows:', err);
+        }
+
+        // Run AI Auto-Reply Assistant
+        try {
+          void dispatchInboundToAiReply({
+            accountId,
+            contactId: contact.id,
+            configOwnerUserId: userId || '00000000-0000-0000-0000-000000000000',
+            conversationId: conversation.id,
+            inboundMessageId: messageId,
+          });
+        } catch (err) {
+          console.error('[messenger-webhook] Error dispatching AI auto-reply:', err);
+        }
+      }
     }
+  } catch (error) {
+    console.error("FAILED TO PROCESS MESSENGER EVENT:", error);
   }
 }
 
