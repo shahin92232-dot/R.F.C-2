@@ -444,6 +444,50 @@ export function MessageThread({
     };
   }, [conversationId]);
 
+  // Messages realtime subscription per conversation.
+  useEffect(() => {
+    if (!conversationId) return;
+    const supabase = createClient();
+
+    const channel = supabase
+      .channel(`messages:${conversationId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "messages",
+          filter: `conversation_id=eq.${conversationId}`,
+        },
+        (payload) => {
+          const newMsg = payload.new as Message;
+          if (newMsg && onNewMessage) {
+            onNewMessage(newMsg);
+          }
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "messages",
+          filter: `conversation_id=eq.${conversationId}`,
+        },
+        (payload) => {
+          const updatedMsg = payload.new as Message;
+          if (updatedMsg && onUpdateMessage) {
+            onUpdateMessage(updatedMsg.id, updatedMsg);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [conversationId, onNewMessage, onUpdateMessage]);
+
   // Clear any in-progress reply draft when the active conversation changes —
   // a quote pulled from conversation A shouldn't bleed into conversation B.
   useEffect(() => {

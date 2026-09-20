@@ -484,7 +484,10 @@ function InboxPageInner() {
   const handleNewMessage = useCallback((msg: Message) => {
     setMessages((prev) => {
       if (prev.some((m) => m.id === msg.id)) return prev;
-      return [...prev, msg];
+      const withoutOptimistic = prev.filter(
+        (m) => !(m.id.startsWith("temp-") && m.content_text === msg.content_text)
+      );
+      return [...withoutOptimistic, msg];
     });
   }, []);
 
