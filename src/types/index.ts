@@ -119,6 +119,7 @@ export interface Contact {
   email?: string;
   company?: string;
   avatar_url?: string;
+  channel?: 'whatsapp' | 'messenger' | 'facebook' | string;
   created_at: string;
   updated_at: string;
   /** Hydrated by queries that embed `contact_tags(tags(*))` (e.g. the
@@ -172,6 +173,7 @@ export interface Conversation {
   id: string;
   user_id: string;
   contact_id: string;
+  channel?: 'whatsapp' | 'messenger' | 'facebook' | string;
   status: ConversationStatus;
   assigned_agent_id?: string;
   last_message_text?: string;

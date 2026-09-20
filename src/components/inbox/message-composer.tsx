@@ -112,6 +112,7 @@ interface MediaDraft {
 interface MessageComposerProps {
   conversationId: string;
   sessionExpired: boolean;
+  channel?: string;
   onSend: (text: string, replyToId?: string) => void;
   onSendMedia: (payload: SendMediaPayload) => void;
   onSendInteractive: (payload: InteractiveMessagePayload, replyToId?: string) => void;
@@ -134,6 +135,7 @@ const OPUS_ENCODER_PATH = "/opus/encoderWorker.min.js";
 export function MessageComposer({
   conversationId,
   sessionExpired,
+  channel,
   onSend,
   onSendMedia,
   onSendInteractive,
@@ -162,35 +164,30 @@ export function MessageComposer({
   const imageInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
   const documentInputRef = useRef<HTMLInputElement>(null);
-  // Mirror of `draft` for the unmount cleanup, which can't read render
-  // state. Kept in sync below so navigating away with a staged-but-unsent
-  // attachment GCs the orphaned object.
   const draftRef = useRef<MediaDraft | null>(null);
   useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
 
-  // Best-effort GC of a staged object the user never sent. Fire-and-forget.
   const removeStaged = useCallback((path: string | undefined) => {
     if (!path) return;
     void deleteAccountMedia(CHAT_MEDIA_BUCKET, path).catch(() => {});
   }, []);
 
-  // Voice recording state. The recorder encodes Ogg/Opus in-browser
-  // (opus-recorder) so there's no server-side transcode.
   const [recording, setRecording] = useState(false);
   const [recordSeconds, setRecordSeconds] = useState(0);
   const recorderRef = useRef<import("opus-recorder").default | null>(null);
   const cancelledRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Viewers (read-only role) can browse the inbox but never send.
-  // For solo users this is always true — single-owner accounts pass
-  // every capability — so the disabled branch is a no-op there.
   const canSend = useCan("send-messages");
   const readOnly = !canSend;
-  // Media (like free-form text) is only allowed inside the 24h window.
-  const inputsDisabled = readOnly || sessionExpired;
+
+  // 24-hour window restriction and template requirement ONLY apply to WhatsApp.
+  // For Facebook Messenger (channel !== 'whatsapp'), composer is always enabled.
+  const isWhatsApp = channel === "whatsapp";
+  const isMessenger = !isWhatsApp;
+  const inputsDisabled = readOnly || (isWhatsApp && sessionExpired);
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -199,14 +196,10 @@ export function MessageComposer({
     }
   }, []);
 
-  // Tear down any live recording + timer on unmount so a mid-record
-  // navigation doesn't leak the mic, and GC a staged-but-unsent
-  // attachment so it doesn't orphan in the bucket.
   useEffect(() => {
     return () => {
       clearTimer();
       cancelledRef.current = true;
-      // stop() releases the mic stream + audio context inside opus-recorder.
       void recorderRef.current?.stop().catch(() => {});
       removeStaged(draftRef.current?.path);
     };
@@ -216,13 +209,13 @@ export function MessageComposer({
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    // Max 4 lines (~96px)
     el.style.height = `${Math.min(el.scrollHeight, 96)}px`;
   }, []);
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed || sending || sessionExpired) return;
+    if (!trimmed || sending) return;
+    if (isWhatsApp && sessionExpired) return;
 
     setSending(true);
     try {
@@ -234,7 +227,7 @@ export function MessageComposer({
     } finally {
       setSending(false);
     }
-  }, [text, sending, sessionExpired, onSend, replyTo?.id]);
+  }, [text, sending, isWhatsApp, sessionExpired, onSend, replyTo?.id]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -547,19 +540,10 @@ export function MessageComposer({
         </div>
       )}
       {sessionExpired && (
-        <div className="mb-2 flex items-center justify-between rounded-lg bg-amber-500/10 px-3 py-2">
-          <p className="text-xs text-amber-400">
-            {t("sessionExpiredHint")}
+        <div className="mb-2 flex items-center justify-between rounded-lg bg-blue-500/10 px-3 py-2">
+          <p className="text-xs text-blue-400">
+            Outside 24-hour standard window. Messages will be sent using Meta Messenger Human Agent Tag.
           </p>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 text-xs text-amber-400 hover:text-amber-300"
-            onClick={onOpenTemplates}
-          >
-            <LayoutTemplate className="mr-1 h-3 w-3" />
-            {t("templates")}
-          </Button>
         </div>
       )}
 
@@ -669,8 +653,7 @@ export function MessageComposer({
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {/* + menu — interactive messages + quick replies. Gated on the
-              24h window like free-form text (interactive requires it). */}
+          {/* + menu — interactive messages + quick replies. */}
           <DropdownMenu>
             <DropdownMenuTrigger
               disabled={inputsDisabled}
@@ -734,19 +717,14 @@ export function MessageComposer({
             placeholder={
               readOnly
                 ? t("readOnlyPlaceholder")
-                : sessionExpired
-                  ? t("sessionExpiredPlaceholder")
-                  : t("typeMessagePlaceholder")
+                : t("typeMessagePlaceholder")
             }
-            disabled={sessionExpired || readOnly}
+            disabled={readOnly}
             rows={1}
-            // Textarea keeps its own inline title — the GatedButton
-            // wrapping pattern doesn't apply to non-button inputs.
-            // The placeholder text also surfaces the read-only state.
             title={readOnly ? t("readOnlyTitle") : undefined}
             className={cn(
               "flex-1 resize-none rounded-xl border border-border bg-muted px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-primary/50",
-              (sessionExpired || readOnly) && "cursor-not-allowed opacity-50"
+              readOnly && "cursor-not-allowed opacity-50"
             )}
           />
 
@@ -754,7 +732,7 @@ export function MessageComposer({
             size="sm"
             canAct={!readOnly}
             gateReason="send messages"
-            disabled={!text.trim() || sessionExpired || sending}
+            disabled={!text.trim() || sending}
             onClick={handleSend}
             className="h-9 w-9 shrink-0 bg-primary p-0 hover:bg-primary/90 disabled:opacity-40"
           >

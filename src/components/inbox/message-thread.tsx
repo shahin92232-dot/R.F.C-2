@@ -232,18 +232,33 @@ export function MessageThread({
     };
   }, []);
 
-  // 24-hour session timer
+  // 24-hour session timer (Only applicable to WhatsApp)
   const sessionInfo = useMemo(() => {
-    if (!messages.length) return { expired: false, remaining: "" };
+    const channel = conversation?.channel || conversation?.contact?.channel || 'messenger';
+    if (channel !== 'whatsapp') {
+      return { expired: false, remaining: "" };
+    }
 
-    // Find last customer message
+    // Find last customer message from messages array
     const lastCustomerMsg = [...messages]
       .reverse()
-      .find((m) => m.sender_type === "customer");
+      .find(
+        (m) =>
+          m.sender_type === "customer" ||
+          (m as any).is_from_customer === true ||
+          (m as any).direction === "inbound"
+      );
 
-    if (!lastCustomerMsg) return { expired: true, remaining: tTimer("noCustomerMessages") };
+    const lastCustomerTime =
+      lastCustomerMsg?.created_at ||
+      (conversation as any)?.last_inbound_at ||
+      (conversation as any)?.last_customer_message_at;
 
-    const hoursSince = differenceInHours(new Date(), new Date(lastCustomerMsg.created_at));
+    if (!lastCustomerTime) {
+      return { expired: true, remaining: tTimer("noCustomerMessages") };
+    }
+
+    const hoursSince = differenceInHours(new Date(), new Date(lastCustomerTime));
     const expired = hoursSince >= 24;
 
     if (expired) {
@@ -257,7 +272,7 @@ export function MessageThread({
         : tTimer("xmRemaining", { minutes: Math.floor(hoursLeft * 60) });
 
     return { expired, remaining };
-  }, [messages, tTimer]);
+  }, [messages, conversation, tTimer]);
 
   // Store latest callback in a ref so fetchMessages doesn't need to
   // depend on `onMessagesLoaded` — otherwise parent re-renders cause
@@ -1180,6 +1195,7 @@ export function MessageThread({
       <MessageComposer
         conversationId={conversation.id}
         sessionExpired={sessionInfo.expired}
+        channel={conversation.channel || conversation.contact?.channel || 'messenger'}
         onSend={handleSend}
         onSendMedia={handleSendMedia}
         onSendInteractive={handleSendInteractive}

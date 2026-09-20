@@ -180,11 +180,16 @@ export async function POST() {
         let metaErr = `Meta API error: ${metaRes.status}`
         try {
           const body = await metaRes.json()
-          if (body?.error?.message) metaErr = body.error.message
+          if (body?.error?.message) {
+            metaErr = body.error.message
+            if (metaErr.includes('does not exist') || metaErr.includes('missing permissions')) {
+              metaErr = 'The configured ID is a Facebook Page ID, not a WhatsApp Business Account ID. Message templates are only available for WhatsApp accounts.'
+            }
+          }
         } catch {
           // response wasn't JSON — keep the fallback
         }
-        return NextResponse.json({ error: metaErr }, { status: 502 })
+        return NextResponse.json({ error: metaErr }, { status: 400 })
       }
 
       const metaBody: {

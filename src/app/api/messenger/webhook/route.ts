@@ -327,7 +327,11 @@ async function handleMessagingEvent(
   const isPostback = !!event.postback;
   const isMessage = !!event.message;
 
-  if (!isPostback && !isMessage) return;
+  // Determine message direction by comparing sender PSID against configured Page ID
+  const configuredPageId = config?.page_id || pageId;
+  const isFromCustomer = senderPsid !== configuredPageId;
+  const senderType = isFromCustomer ? 'customer' : 'agent';
+  const direction = isFromCustomer ? 'inbound' : 'outbound';
 
   // Find or create Contact by PSID
   const contact = await findOrCreateMessengerContact({
@@ -379,7 +383,7 @@ async function handleMessagingEvent(
     }
   }
 
-  // Insert inbound message into DB
+  // Insert message into DB with explicit directional flags
   let insertedMsg: any = null;
   try {
     const { data: newMsg, error: msgError } = await supabaseAdmin()
@@ -387,7 +391,9 @@ async function handleMessagingEvent(
       .insert({
         conversation_id: conversation.id,
         account_id: accountId,
-        sender_type: 'customer',
+        sender_type: senderType,
+        is_from_customer: isFromCustomer,
+        direction: direction,
         content_type: contentType,
         content_text: contentText,
         media_url: mediaUrl,
@@ -409,18 +415,24 @@ async function handleMessagingEvent(
 
   const nowIso = new Date().toISOString();
 
-  // Update conversation last_message, unread_count, and last_inbound_at (24-hour window)
+  // Update conversation last_message, unread_count, and last_inbound_at / last_customer_message_at
   try {
+    const updatePayload: any = {
+      last_message_text: contentText,
+      last_message_at: nowIso,
+      updated_at: nowIso,
+    };
+
+    if (isFromCustomer) {
+      updatePayload.last_inbound_at = nowIso;
+      updatePayload.last_customer_message_at = nowIso;
+      updatePayload.unread_count = (conversation.unread_count || 0) + 1;
+      updatePayload.status = 'open';
+    }
+
     const { error: convUpdateErr } = await supabaseAdmin()
       .from('conversations')
-      .update({
-        last_message_text: contentText,
-        last_message_at: nowIso,
-        last_inbound_at: nowIso,
-        unread_count: (conversation.unread_count || 0) + 1,
-        status: 'open',
-        updated_at: nowIso,
-      })
+      .update(updatePayload)
       .eq('id', conversation.id);
 
     if (convUpdateErr) {

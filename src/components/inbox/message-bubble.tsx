@@ -248,7 +248,11 @@ export function MessageBubble({
 }: MessageBubbleProps) {
   const t = useTranslations("Inbox.bubble");
 
-  const isAgent = message.sender_type === "agent" || message.sender_type === "bot";
+  const isCustomer =
+    message.sender_type === "customer" ||
+    (message as any).is_from_customer === true ||
+    (message as any).direction === "inbound";
+  const isAgent = !isCustomer;
   const time = format(new Date(message.created_at), "HH:mm");
   const failure = isAgent ? failureReason(message) : null;
 
