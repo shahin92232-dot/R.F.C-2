@@ -154,6 +154,7 @@ export async function POST(request: Request) {
   let body: { object?: string; entry?: MessengerWebhookEntry[] };
   try {
     body = JSON.parse(rawBody);
+    console.log("INCOMING MESSENGER WEBHOOK PAYLOAD:", JSON.stringify(body, null, 2));
   } catch (err) {
     console.error('[messenger-webhook] Error parsing raw JSON body:', err);
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
@@ -226,7 +227,7 @@ export async function POST(request: Request) {
     console.error('[messenger-webhook] Unhandled error during webhook processing:', error);
   }
 
-  return NextResponse.json({ status: 'received' }, { status: 200 });
+  return NextResponse.json({ status: 'ok' }, { status: 200 });
 }
 
 async function processMessengerWebhook(entries: MessengerWebhookEntry[]) {
@@ -322,6 +323,10 @@ async function handleMessagingEvent(
   const isPostback = !!event.postback;
   const isMessage = !!event.message;
   const isEcho = !!event.message?.is_echo;
+
+  if (isEcho) {
+    console.log("IS_ECHO EVENT DETECTED:", JSON.stringify(event.message, null, 2));
+  }
 
   // For echoes, sender.id is Page ID and recipient.id is Customer PSID.
   // For incoming customer messages, sender.id is Customer PSID and recipient.id is Page ID.
