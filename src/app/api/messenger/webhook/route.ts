@@ -318,31 +318,31 @@ async function handleMessagingEvent(
     return;
   }
 
-  // 3. Message Echoes (messages sent by Page)
-  if (event.message?.is_echo) {
-    return;
-  }
-
-  // 4. Inbound Message or Postback
+  // 3. Inbound Message, Postback, or Admin Echo Message
   const isPostback = !!event.postback;
   const isMessage = !!event.message;
+  const isEcho = !!event.message?.is_echo;
 
-  // Determine message direction by comparing sender PSID against configured Page ID
+  // For echoes, sender.id is Page ID and recipient.id is Customer PSID.
+  // For incoming customer messages, sender.id is Customer PSID and recipient.id is Page ID.
+  const customerPsid = isEcho ? recipientId : senderPsid;
+
+  // Determine message direction
   const configuredPageId = config?.page_id || pageId;
-  const isFromCustomer = senderPsid !== configuredPageId;
+  const isFromCustomer = !isEcho && (senderPsid !== configuredPageId);
   const senderType = isFromCustomer ? 'customer' : 'agent';
   const direction = isFromCustomer ? 'inbound' : 'outbound';
 
-  // Find or create Contact by PSID
+  // Find or create Contact by PSID (Customer PSID)
   const contact = await findOrCreateMessengerContact({
-    psid: senderPsid,
+    psid: customerPsid,
     userId,
     accountId,
     pageAccessToken,
   });
 
   if (!contact) {
-    console.error('[messenger-webhook] Failed to find or create contact for PSID:', senderPsid);
+    console.error('[messenger-webhook] Failed to find or create contact for PSID:', customerPsid);
     return;
   }
 
@@ -351,7 +351,7 @@ async function handleMessagingEvent(
     contactId: contact.id,
     userId,
     accountId,
-    psid: senderPsid,
+    psid: customerPsid,
   });
 
   if (!conversation) {
