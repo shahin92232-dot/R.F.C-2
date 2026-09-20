@@ -389,25 +389,42 @@ async function handleMessagingEvent(
       }
     }
 
-    // Insert message into DB with explicit directional flags
+    // Insert message into DB with explicit directional flags & schema fallback
     let insertedMsg: any = null;
     try {
-      const { data: newMsg, error: msgError } = await supabaseAdmin()
+      const baseInsertPayload: any = {
+        conversation_id: conversation.id,
+        account_id: accountId,
+        is_from_customer: isFromCustomer,
+        direction: direction,
+        content_type: contentType,
+        content_text: contentText,
+        media_url: mediaUrl,
+        message_id: messageId,
+        status: 'sent',
+      };
+
+      // Try primary insertion with sender_type included
+      let { data: newMsg, error: msgError } = await supabaseAdmin()
         .from('messages')
         .insert({
-          conversation_id: conversation.id,
-          account_id: accountId,
+          ...baseInsertPayload,
           sender_type: senderType,
-          is_from_customer: isFromCustomer,
-          direction: direction,
-          content_type: contentType,
-          content_text: contentText,
-          media_url: mediaUrl,
-          message_id: messageId,
-          status: 'sent',
         })
         .select()
         .single();
+
+      // If sender_type column is missing in schema cache (PGRST204 error), retry insert without sender_type
+      if (msgError && (msgError.code === 'PGRST204' || msgError.message?.includes('sender_type'))) {
+        console.warn('[messenger-webhook] sender_type column missing in schema cache, retrying insert without sender_type...');
+        const fallback = await supabaseAdmin()
+          .from('messages')
+          .insert(baseInsertPayload)
+          .select()
+          .single();
+        newMsg = fallback.data;
+        msgError = fallback.error;
+      }
 
       if (msgError) {
         console.error('FAILED TO PROCESS MESSENGER EVENT: DB Error inserting message:', msgError);
