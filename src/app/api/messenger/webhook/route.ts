@@ -392,9 +392,11 @@ async function handleMessagingEvent(
     // Insert message into DB with explicit directional flags & schema fallback
     let insertedMsg: any = null;
     try {
-      const baseInsertPayload: any = {
+      // Full payload — includes optional columns that may not be in schema cache yet
+      const fullInsertPayload: any = {
         conversation_id: conversation.id,
         account_id: accountId,
+        sender_type: senderType,
         is_from_customer: isFromCustomer,
         direction: direction,
         content_type: contentType,
@@ -404,22 +406,30 @@ async function handleMessagingEvent(
         status: 'sent',
       };
 
-      // Try primary insertion with sender_type included
+      // Minimal payload — only fundamental columns guaranteed to exist in schema
+      const minimalInsertPayload: any = {
+        conversation_id: conversation.id,
+        is_from_customer: isFromCustomer,
+        direction: direction,
+        content_text: contentText,
+        message_id: messageId,
+        status: 'sent',
+      };
+
+      // Try full insertion first
       let { data: newMsg, error: msgError } = await supabaseAdmin()
         .from('messages')
-        .insert({
-          ...baseInsertPayload,
-          sender_type: senderType,
-        })
+        .insert(fullInsertPayload)
         .select()
         .single();
 
-      // If sender_type column is missing in schema cache (PGRST204 error), retry insert without sender_type
-      if (msgError && (msgError.code === 'PGRST204' || msgError.message?.includes('sender_type'))) {
-        console.warn('[messenger-webhook] sender_type column missing in schema cache, retrying insert without sender_type...');
+      // If any schema column is missing in PostgREST schema cache (PGRST204),
+      // retry with only the minimal guaranteed columns
+      if (msgError && msgError.code === 'PGRST204') {
+        console.warn('[messenger-webhook] PGRST204 schema cache mismatch, retrying with minimal payload. Column error:', msgError.message);
         const fallback = await supabaseAdmin()
           .from('messages')
-          .insert(baseInsertPayload)
+          .insert(minimalInsertPayload)
           .select()
           .single();
         newMsg = fallback.data;
