@@ -290,6 +290,17 @@ async function handleMessagingEvent(
   config: any
 ) {
   try {
+    // ── ECHO GUARD ──────────────────────────────────────────────────────────
+    // Facebook sends echo events (is_echo: true) for every message the Page
+    // sends.  These share the same mid as the outbound message we already
+    // saved, so inserting them again causes a duplicate-key (23505) error.
+    // Short-circuit immediately — no DB writes, no AI trigger.
+    if (event.message?.is_echo) {
+      console.log('[messenger-webhook] Ignoring echo event mid:', event.message.mid);
+      return;
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     const senderPsid = event.sender?.id;
     const recipientId = event.recipient?.id;
 
@@ -320,22 +331,17 @@ async function handleMessagingEvent(
       return;
     }
 
-    // 3. Inbound Message, Postback, or Admin Echo Message
+    // 3. Inbound Customer Message or Postback
+    // (Echo events are already filtered out above — we never reach here for echoes.)
     const isPostback = !!event.postback;
-    const isMessage = !!event.message;
-    const isEcho = !!event.message?.is_echo;
 
-    if (isEcho) {
-      console.log("IS_ECHO EVENT DETECTED:", JSON.stringify(event.message, null, 2));
-    }
+    // For all real inbound events: sender.id is the customer PSID,
+    // recipient.id is the Page ID.
+    const customerPsid = senderPsid;
 
-    // For echoes, sender.id is Page ID and recipient.id is Customer PSID.
-    // For incoming customer messages, sender.id is Customer PSID and recipient.id is Page ID.
-    const customerPsid = isEcho ? recipientId : senderPsid;
-
-    // Determine message direction
+    // Determine message direction — always inbound here since echoes are gone
     const configuredPageId = config?.page_id || pageId;
-    const isFromCustomer = !isEcho && (senderPsid !== configuredPageId);
+    const isFromCustomer = senderPsid !== configuredPageId;
     const senderType = isFromCustomer ? 'customer' : 'agent';
     const direction = isFromCustomer ? 'inbound' : 'outbound';
 
