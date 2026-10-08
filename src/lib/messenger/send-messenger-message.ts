@@ -216,3 +216,106 @@ export async function sendMessengerMessageToConversation(
 
   return { messageId: inserted.id, messengerMessageId: messengerMsgId };
 }
+
+// ---------------------------------------------------------------------------
+// Engine-level sender for the AI auto-reply (Messenger equivalent of
+// flows/meta-send.ts#engineSendText).  Uses messenger_config + PSID so the
+// reply lands in Facebook Messenger, not WhatsApp.
+// ---------------------------------------------------------------------------
+
+export interface EngineMessengerTextArgs {
+  accountId: string;
+  conversationId: string;
+  contactId: string;
+  text: string;
+  aiGenerated?: boolean;
+}
+
+export async function engineSendMessengerText(
+  db: SupabaseClient,
+  args: EngineMessengerTextArgs,
+): Promise<{ messengerMessageId: string }> {
+  const { accountId, conversationId, contactId, text, aiGenerated } = args;
+
+  // 1. Resolve the customer's PSID from their contact row.
+  const { data: contact, error: contactErr } = await db
+    .from('contacts')
+    .select('id, psid')
+    .eq('id', contactId)
+    .maybeSingle();
+  if (contactErr || !contact?.psid) {
+    throw new SendMessengerMessageError(
+      'bad_request',
+      `Contact ${contactId} has no Messenger PSID`,
+      400,
+    );
+  }
+
+  // 2. Load Messenger page credentials from messenger_config.
+  let pageId = process.env.META_PAGE_ID || '';
+  let pageAccessToken = process.env.META_PAGE_ACCESS_TOKEN || '';
+
+  const { data: config } = await db
+    .from('messenger_config')
+    .select('page_id, access_token')
+    .or(`account_id.eq.${accountId},user_id.eq.${accountId}`)
+    .maybeSingle();
+
+  if (config?.page_id && config?.access_token) {
+    pageId = config.page_id;
+    try {
+      pageAccessToken = decrypt(config.access_token);
+    } catch {
+      pageAccessToken = config.access_token;
+    }
+  }
+
+  if (!pageId || !pageAccessToken) {
+    throw new SendMessengerMessageError(
+      'messenger_not_configured',
+      'Facebook Page ID and Page Access Token not configured.',
+      400,
+    );
+  }
+
+  // 3. Send via Messenger Send API.
+  const result = await sendMessengerTextMessage({
+    pageId,
+    pageAccessToken,
+    psid: contact.psid,
+    text,
+    messagingType: 'RESPONSE',
+  });
+
+  // 4. Persist outbound message to the DB.
+  const nowIso = new Date().toISOString();
+  const { error: msgErr } = await db.from('messages').insert({
+    conversation_id: conversationId,
+    sender_type: 'bot',
+    content_type: 'text',
+    content_text: text,
+    message_id: result.messageId,
+    status: 'sent',
+    ai_generated: aiGenerated ?? false,
+  });
+  if (msgErr) {
+    console.error('[messenger-engine-send] DB insert failed:', msgErr);
+    throw new SendMessengerMessageError(
+      'db_error',
+      `Sent to Meta but DB insert failed: ${msgErr.message}`,
+      500,
+    );
+  }
+
+  // 5. Update conversation preview.
+  await db
+    .from('conversations')
+    .update({
+      last_message_text: text,
+      last_message_at: nowIso,
+      updated_at: nowIso,
+    })
+    .eq('id', conversationId);
+
+  return { messengerMessageId: result.messageId };
+}

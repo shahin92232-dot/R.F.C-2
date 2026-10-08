@@ -12,20 +12,22 @@ import {
   loadAccountMetaCredentials,
 } from '@/lib/flows/meta-send'
 import { sendTypingIndicator } from '@/lib/whatsapp/meta-api'
+import { engineSendMessengerText } from '@/lib/messenger/send-messenger-message'
 import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 
 interface DispatchArgs {
-  /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
+  /** Tenancy key — drives config, contact, and messenger_config / whatsapp_config lookups. */
   accountId: string
   conversationId: string
   contactId: string
-  /** The account's WhatsApp config owner, used for the outbound send's
-   *  audit columns (mirrors how the flow runner passes it through). */
+  /** The account's config owner, used for the outbound send's audit columns. */
   configOwnerUserId: string
-  /** Meta's wamid of the customer message we're replying to. When set,
-   *  a typing indicator (which also marks it read) is shown while the
-   *  reply is generated. Optional so older callers keep working. */
+  /** Meta's message id of the customer message we're replying to. When set
+   *  (WhatsApp only) a typing indicator is shown while the reply is generated. */
   inboundMessageId?: string
+  /** Which channel this conversation lives on. Determines the send path.
+   *  Defaults to 'whatsapp' to keep all existing callers working. */
+  channel?: 'whatsapp' | 'messenger'
 }
 
 /**
@@ -56,6 +58,7 @@ export async function dispatchInboundToAiReply(
     contactId,
     configOwnerUserId,
     inboundMessageId,
+    channel = 'whatsapp',
   } = args
 
   try {
@@ -118,7 +121,8 @@ export async function dispatchInboundToAiReply(
     // 25 s or when our reply lands, whichever is first, so there's
     // nothing to undo on the handoff / no-text path. Strictly
     // best-effort: a failed indicator must never cost us the reply.
-    if (inboundMessageId) {
+    // Typing indicator is WhatsApp-only (requires phoneNumberId + wamid).
+    if (channel === 'whatsapp' && inboundMessageId) {
       await showTypingIndicator(db, accountId, inboundMessageId)
     }
 
@@ -203,14 +207,24 @@ export async function dispatchInboundToAiReply(
     }
     if (claimed !== true) return // lost the per-conversation cap race
 
-    await engineSendText({
-      accountId,
-      userId: configOwnerUserId,
-      conversationId,
-      contactId,
-      text,
-      aiGenerated: true,
-    })
+    if (channel === 'messenger') {
+      await engineSendMessengerText(db, {
+        accountId,
+        conversationId,
+        contactId,
+        text,
+        aiGenerated: true,
+      })
+    } else {
+      await engineSendText({
+        accountId,
+        userId: configOwnerUserId,
+        conversationId,
+        contactId,
+        text,
+        aiGenerated: true,
+      })
+    }
   } catch (err) {
     console.error('[ai auto-reply] dispatch failed:', err)
   }

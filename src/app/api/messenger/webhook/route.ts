@@ -547,6 +547,7 @@ async function handleMessagingEvent(
             configOwnerUserId: userId || '00000000-0000-0000-0000-000000000000',
             conversationId: conversation.id,
             inboundMessageId: messageId,
+            channel: 'messenger',
           });
         } catch (err) {
           console.error('[messenger-webhook] Error dispatching AI auto-reply:', err);
